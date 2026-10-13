@@ -1,0 +1,13 @@
+# Local env / secrets
+.env
+
+# Node
+node_modules/
+dist/
+npm-debug.log*
+
+# OS noise
+.DS_Store
+
+# Command Code local tooling (session permissions, learned preferences)
+.commandcode/

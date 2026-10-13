@@ -1,0 +1,19 @@
+# Build context sent to the Docker daemon. Smaller context = faster builds and
+# no chance of leaking local junk into your image.
+#
+# THE classic beginner bug: forgetting to ignore node_modules, then copying your
+# host's macOS binaries into a Linux image. Always ignore it.
+node_modules
+dist
+coverage
+npm-debug.log*
+
+# Never bake secrets or local env files into an image.
+.env
+.env.*
+
+.git
+.gitignore
+Dockerfile
+.dockerignore
+*.md

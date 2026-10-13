@@ -1,0 +1,102 @@
+# =============================================================================
+# docker-compose.yml - describes the WHOLE app as one unit.
+#
+# `docker compose up` creates a private network, starts every service on it, and
+# lets them address each other by SERVICE NAME (postgres, redis, backend).
+# Run `docker compose up` and you have the entire stack in one command.
+# =============================================================================
+
+name: docker-learning
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL - the durable store. Data lives in a NAMED VOLUME, so it
+  # survives container recreation. That is the whole point of volumes.
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs once, on first init of an EMPTY data dir (see db/init.sql).
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      # Published so you can connect with psql/TablePlus from your host.
+      # In production you would NOT publish this - only nginx talks to the app.
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-app}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Redis - fast in-memory store. Used here as a shared counter, which lets you
+  # SEE that all backend replicas share the same state.
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------------------
+  # Backend - built from ./backend/Dockerfile.
+  #
+  # NOTE: there is deliberately NO `ports:` here. The app is reachable ONLY
+  # through nginx. That mirrors production: internal services expose nothing to
+  # the outside world.
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      PGHOST: postgres          # <- service name, resolved by Docker DNS
+      PGPORT: 5432
+      PGUSER: ${POSTGRES_USER:-app}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-app}
+      PGDATABASE: ${POSTGRES_DB:-app}
+      REDIS_HOST: redis         # <- service name again
+      REDIS_PORT: 6379
+    depends_on:
+      # Don't start until the dependencies are actually HEALTHY, not merely
+      # "started". This is what kills the classic "connection refused on boot".
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      replicas: 2               # start with 2 instances behind nginx
+
+  # ---------------------------------------------------------------------------
+  # Nginx - the only service exposed to your machine. It reverse-proxies to
+  # every backend replica, round-robin (see nginx/nginx.conf).
+  # ---------------------------------------------------------------------------
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${APP_PORT:-8080}:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:
+  redisdata:
