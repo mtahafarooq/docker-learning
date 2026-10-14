@@ -232,6 +232,48 @@ We install a **second time**, on purpose. The Stage 1 `node_modules` has the dev
 tooling baked in with no clean way to separate it, so we simply build a fresh,
 prod-only tree. `--omit=dev` drops `typescript`, `@nestjs/cli`, and friends.
 
+### Why two installs instead of one?
+
+A fair question: why not just add `--omit=dev` to Stage 1 and be done?
+
+Because **Stage 1 exists to feed Stage 2 (`build`), and building needs the dev
+tools.** `npm run build` runs `nest build`; the `nest` binary comes from
+`@nestjs/cli`, and compiling needs `typescript` — both live in
+`devDependencies`. Strip them out and the build dies:
+
+```text
+  IF deps used `npm ci --omit=dev`:
+
+  STAGE 1 deps            STAGE 2 build (FROM deps)
+  ┌──────────────┐        ┌───────────────────────────────┐
+  │ node_modules │───────►│ node_modules   (prod only)     │
+  │  (prod only) │        │ RUN npm run build → nest       │
+  └──────────────┘        │        ▲                       │
+                          │        └─ ✗ "nest: not found"   │
+                          │           ✗ no typescript       │
+                          └───────────────────────────────┘
+```
+
+So the two stages have two different jobs, and the flags differ to match:
+
+| Stage | Install command | Its job |
+| --- | --- | --- |
+| `deps` | `npm ci` (everything) | Feed `build` — which needs the compiler + Nest CLI |
+| `prod-deps` | `npm ci --omit=dev` | Feed `runtime` — which must stay free of dev tooling |
+
+**Why not reuse `deps` for the final image then?** Because it's `dev + prod` mixed
+together, and the runtime image must not ship a compiler. You *could* run
+`npm prune --omit=dev` to strip it after building, but a dedicated clean install
+is more predictable and caches on its own — the `prod-deps` layer only rebuilds
+when `package.json`/`package-lock.json` change, independently of your code.
+
+> Small clarification: `npm ci`, `npm install`, and `npm cache` are **built-in npm
+> subcommands** — npm ships inside the `node:22-alpine` base image, so they never
+> appear in `package.json`. `package.json` only lists *which* packages to install
+> (`dependencies` vs `devDependencies`) and your own `scripts` (run with
+> `npm run <name>`, like `build`). That's why `--omit=dev` works at all: it simply
+> tells npm to read `dependencies` and ignore `devDependencies`.
+
 ### Stage 4 — `runtime`: the box that ships
 
 ```dockerfile
